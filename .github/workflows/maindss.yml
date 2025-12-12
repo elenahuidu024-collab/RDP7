@@ -1,0 +1,113 @@
+name: Gaming-Perf-WS2022-Extreme
+
+on:
+  workflow_dispatch:
+
+jobs:
+  perf-boost:
+    runs-on: windows-2022
+    timeout-minutes: 360   # rulează 6 ore
+
+    steps:
+      - name: System Info
+        shell: pwsh
+        run: |
+          wmic cpu get name,numberofcores,numberoflogicalprocessors
+          wmic os get caption,version,buildnumber
+
+      - name: Enable WARP GPU Emulation
+        shell: pwsh
+        run: |
+          $warpKey = "HKCU:\Software\Microsoft\Direct3D"
+          New-Item -Path $warpKey -Force | Out-Null
+          Set-ItemProperty -Path $warpKey -Name "EmulateGpu" -Value 1
+          Write-Host "WARP GPU emulation enabled."
+
+      - name: Install Mesa3D (LLVMpipe OpenGL/Vulkan)
+        shell: pwsh
+        run: |
+          # Folosește ultima versiune stabilă din releases
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/24.2.0/mesa3d-24.2.0-release-msvc.zip"
+          $zip = "$env:TEMP\mesa.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "C:\mesa" -Force
+          $env:PATH += ";C:\mesa\x64"
+          Write-Host "Mesa3D installed successfully."
+
+      - name: DXVK Setup
+        shell: pwsh
+        run: |
+          git clone https://github.com/doitsujin/dxvk $env:TEMP\dxvk
+          cd $env:TEMP\dxvk
+          meson setup build
+          ninja -C build install
+          [Environment]::SetEnvironmentVariable("DXVK_HUD","1","Machine")
+          Write-Host "DXVK installed."
+
+      - name: Power & Cooling Tweaks
+        shell: pwsh
+        run: |
+          powercfg /setactive SCHEME_MIN
+          powercfg /setacvalueindex scheme_current sub_processor PROCTHROTTLEMIN 100
+          powercfg /setacvalueindex scheme_current sub_processor PROCTHROTTLEMAX 100
+          powercfg /setacvalueindex scheme_current sub_processor PERFBOOSTMODE 3
+          powercfg /hibernate off
+          bcdedit /set disabledynamictick yes
+          bcdedit /set useplatformclock yes
+          Write-Host "Power & cooling tweaks applied."
+
+      - name: Memory & Pagefile
+        shell: pwsh
+        run: |
+          wmic pagefileset where name="C:\\pagefile.sys" set InitialSize=16384,MaximumSize=16384
+          Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" -Name "ClearPageFileAtShutdown" -Value 0
+          Write-Host "Pagefile fixed at 16GB."
+
+      - name: Network Latency Tweaks
+        shell: pwsh
+        run: |
+          New-Item "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" -Force | Out-Null
+          Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" -Name "TcpAckFrequency" -Value 1
+          Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" -Name "TCPNoDelay" -Value 1
+          netsh int tcp set global rss=enabled
+          netsh int tcp set global autotuninglevel=normal
+          Write-Host "Network tweaks applied."
+
+      - name: MMCSS & Game Mode
+        shell: pwsh
+        run: |
+          New-Item "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" -Force | Out-Null
+          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" -Name "NetworkThrottlingIndex" -Value 0xFFFFFFFF
+          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" -Name "SystemResponsiveness" -Value 0
+          New-Item "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" -Force | Out-Null
+          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" -Name "GPU Priority" -Value 8
+          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" -Name "Priority" -Value 6
+          Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" -Name "Scheduling Category" -Value "High"
+          Write-Host "Game Mode tweaks applied."
+
+      - name: CPU Spoof + KVM-like boost
+        shell: pwsh
+        run: |
+          Set-ItemProperty "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -Name "ProcessorNameString" -Value "Intel(R) Core(TM) i9-12900K (Software GPU Boost)"
+          bcdedit /set numproc 8
+          Write-Host "CPU spoofed and numproc set."
+
+      - name: Disable Non-essential Services
+        shell: pwsh
+        run: |
+          $services = @("DiagTrack","MapsBroker","WerSvc","SysMain")
+          foreach ($s in $services) {
+            Stop-Service $s -ErrorAction SilentlyContinue
+            Set-Service $s -StartupType Disabled -ErrorAction SilentlyContinue
+          }
+          Write-Host "Non-essential services disabled."
+
+      - name: Keep Alive 6h
+        shell: pwsh
+        run: |
+          $end = (Get-Date).AddHours(6)
+          while((Get-Date) -lt $end) {
+            Write-Host "[$(Get-Date)] VM alive, optimizations active..."
+            Start-Sleep 300
+          }
+          
